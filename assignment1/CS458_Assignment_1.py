@@ -14,6 +14,13 @@ import numpy as np
 from roipoly import RoiPoly
 
 
+class ImageArray:
+    def __init__(self, base_name, shape, array):
+        self.base_name = base_name
+        self.shape = shape
+        self.array = array
+
+
 #hand label region related functions
 #**************************************************************************************************
 #hand label pos/neg region for training data
@@ -126,16 +133,23 @@ def import_pre_labeled_training(training_path, region_path):
             pos_vec = pos_mask.flatten()
             neg_vec = neg_mask.flatten()
 
+            features_list = []
+            labels_list = []
             # Label positive pixels with 1, negative pixels with 0
             for pixel, pos, neg in zip(pixels_vec, pos_vec, neg_vec):
                 if pos:
-                    features.append(pixel)
-                    labels.append(1)
+                    features_list.append(pixel)
+                    labels_list.append(1)
                 if neg:
-                    features.append(pixel)
-                    labels.append(0)
+                    features_list.append(pixel)
+                    labels_list.append(0)
+
+            img_features = ImageArray(base_name, img.shape, np.array(features_list))
+            img_labels = ImageArray(base_name, img.shape, np.array(labels_list))
+            features.append(img_features)
+            labels.append(img_labels)
     
-    return np.asarray(features), np.asarray(labels)
+    return features, labels
 
 
 #import per hand labeled region for testing data
@@ -161,30 +175,42 @@ def import_pre_labeled_testing(testing_path, region_path):
             pixels_vec = img.reshape(-1, channels) # shape: (height * width, channels)
             pos_vec = pos_mask.flatten()
 
+            features_list = []
+            labels_list = []
             # Label positive pixels with 1, negative pixels (everything else) with 0
             for pixel, pos in zip(pixels_vec, pos_vec):
                 if pos:
-                    features.append(pixel)
-                    labels.append(1)
+                    features_list.append(pixel)
+                    labels_list.append(1)
                 else:
-                    features.append(pixel)
-                    labels.append(0)
+                    features_list.append(pixel)
+                    labels_list.append(0)
+
+            img_features = ImageArray(base_name, img.shape, np.array(features_list))
+            img_labels = ImageArray(base_name, img.shape, np.array(labels_list))
+            features.append(img_features)
+            labels.append(img_labels)
     
-    return np.asarray(features), np.asarray(labels)
+    return features, labels
 #**************************************************************************************************
 
 
 #main GDA training functions
 #**************************************************************************************************
 def train_GDA_common_variance(features, labels):
-    x = np.asarray(features)
-    y = np.asarray(labels)
+    x = np.concatenate([f.array for f in features])
+    y = np.concatenate([l.array for l in labels])
     n, d = x.shape
     if n == 0:
         prior = np.array([0.5, 0.5])
         mu = np.zeros((2, d))
         cov = np.identity(d)
-        return prior, mu, (cov, cov)
+        return prior, mu, [cov]
+    
+    print(f"x:\n{x}")
+    print(f"y:\n{y}")
+    print(f"x.shape = {x.shape}")
+    print(f"y.shape = {y.shape}")
 
     x0 = x[y == 0]
     x1 = x[y == 1]
@@ -195,11 +221,16 @@ def train_GDA_common_variance(features, labels):
     p0 = n0 / n
     p1 = n1 / n
     prior = np.array([p0, p1])
+    print(f"priors:")
+    print(f"- p0 = {p0}")
+    print(f"- p1 = {p1}")
 
     # Compute means (along columns)
     mu0 = np.mean(x0, axis=0) if n0 > 0 else np.zeroes(d)
     mu1 = np.mean(x1, axis=0) if n1 > 0 else np.zeroes(d)
-    mu = np.array([mu0, mu1])
+    mu = np.vstack([mu0, mu1])
+    print(f"mu0 = {mu0}")
+    print(f"mu1 = {mu1}")
 
     # Common covariance matrix
     cov = np.zeros((d, d))
@@ -214,18 +245,24 @@ def train_GDA_common_variance(features, labels):
         xdiff1 = x1 - mu1
         cov += xdiff1.T @ xdiff1
     cov = cov / (n - 1)
+    print(f"cov = {cov}")
 
-    return prior, mu, (cov, cov)
+    return prior, mu, [cov]
 
 def train_GDA_variable_variance(features, labels):
-    x = np.asarray(features)
-    y = np.asarray(labels)
+    x = np.concatenate([f.array for f in features])
+    y = np.concatenate([l.array for l in labels])
     n, d = x.shape
     if n == 0:
         prior = np.array([0.5, 0.5])
         mu = np.zeros((2, d))
         cov = np.identity(d)
-        return prior, mu, (cov, cov)
+        return prior, mu, [cov, cov]
+
+    print(f"x:\n{x}")
+    print(f"y:\n{y}")
+    print(f"x.shape = {x.shape}")
+    print(f"y.shape = {y.shape}")
 
     x0 = x[y == 0]
     x1 = x[y == 1]
@@ -236,11 +273,16 @@ def train_GDA_variable_variance(features, labels):
     p0 = n0 / n
     p1 = n1 / n
     prior = np.array([p0, p1])
+    print(f"priors:")
+    print(f"- p0 = {p0}")
+    print(f"- p1 = {p1}")
 
     # Compute means (along columns)
     mu0 = np.mean(x0, axis=0) if n0 > 0 else np.zeroes(d)
     mu1 = np.mean(x1, axis=0) if n1 > 0 else np.zeroes(d)
     mu = np.vstack([mu0, mu1])
+    print(f"mu0 = {mu0}")
+    print(f"mu1 = {mu1}")
 
     cov0 = np.identity(d)
     cov1 = np.identity(d)
@@ -250,8 +292,10 @@ def train_GDA_variable_variance(features, labels):
     if n1 > 0:
         xdiff1 = x1 - mu1
         cov1 = (xdiff1.T @ xdiff1) / (n1 - 1)
+    print(f"cov0 = {cov0}")
+    print(f"cov1 = {cov1}")
 
-    return prior, mu, (cov0, cov1)
+    return prior, mu, [cov0, cov1]
 #**************************************************************************************************
 
 
@@ -259,52 +303,69 @@ def train_GDA_variable_variance(features, labels):
 #**************************************************************************************************
 #assign labels using trained GDA parameters for testing features
 def predict(testing_features, prior, mu, cov):
-    x = testing_features
     p0, p1 = prior[0], prior[1]
     mu0, mu1 = mu[0], mu[1]
-    cov0, cov1 = cov
+    cov0 = cov[0]
+    cov1 = cov[1 if len(cov) > 1 else 0]
 
-    _, logDet0 = np.linalg.slogdet(cov0)
-    _, logDet1 = np.linalg.slogdet(cov1)
+    _, logdet0 = np.linalg.slogdet(cov0)
+    _, logdet1 = np.linalg.slogdet(cov1)
 
-    invCov0 = np.linalg.inv(cov0)
-    invCov1 = np.linalg.inv(cov1)
+    invcov0 = np.linalg.inv(cov0)
+    invcov1 = np.linalg.inv(cov1)
 
-    logPrior0 = math.log(p0)
-    logPrior1 = math.log(p1)
+    logprior0 = math.log(p0)
+    logprior1 = math.log(p1)
 
-    # x: (n, d) - n rows, each with d elements
-    # mu0: (d) - single row
-    # xdiff0: x with mu0 subtracted from each row
-    #   - each row now represents some (xi - mu0)
-    xdiff0 = x - mu0
-    xdiff1 = x - mu1
+    predicted_labels = []
+    for img_features in testing_features:
+        x = img_features.array
 
-    # We wish to compute the term 
-    #       -0.5 * [ (x-mu)^T @ invCov @ (x-mu) ]
-    # for each pixel x.
-    #
-    # In the above expression, x (hence x-mu) is a column vector, but in our
-    # code, (x-mu) corresponds to rows in xdiff. Hence
-    #       xdiff @ invCov
-    # gives a matrix where for each row (x-mu) in xdiff, the corresponding row
-    # in the resulting matrix is
-    #       (x-mu)^T @ invCov
-    # Now, taking the dot product of this and (x-mu) gives exactly
-    #       (x-mu)^T @ invCov @ (x-mu)
-    # So, do component-wise multiplication (*) with xdiff (remember, (x-mu) are
-    # rows in xdiff), then sum across each row. The result is an n-dim vector
-    # where each entry is
-    #       (x-mu)^T @ invCov @ (x-mu)
-    # for the corresponding row x, as desired.
-    var0 = -0.5 * np.sum((xdiff0 @ invCov0) * xdiff0, axis=1)
-    var1 = -0.5 * np.sum((xdiff1 @ invCov1) * xdiff1, axis=1)
+        # x: (n, d) - n rows, each with d elements
+        # mu0: (d) - single row
+        # xdiff0: x with mu0 subtracted from each row
+        #   - each row now represents some (xi - mu0)
+        xdiff0 = x - mu0
+        xdiff1 = x - mu1
 
-    # Add scalar term (-0.5*logDet + logPrior) to every entry of above vector
-    delta0 = var0 - 0.5 * logDet0 + logPrior0
-    delta1 = var1 - 0.5 * logDet1 + logPrior1
+        # We wish to compute the term 
+        #       -0.5 * [ (x-mu)^T @ invCov @ (x-mu) ]
+        # for each pixel x.
+        #
+        # In the above expression, x (hence x-mu) is a column vector, but in our
+        # code, (x-mu) corresponds to rows in xdiff. Hence
+        #       xdiff @ invCov
+        # gives a matrix where for each row (x-mu) in xdiff, the corresponding row
+        # in the resulting matrix is
+        #       (x-mu)^T @ invCov
+        # Now, taking the dot product of this and (x-mu) gives exactly
+        #       (x-mu)^T @ invCov @ (x-mu)
+        # So, do component-wise multiplication (*) with xdiff (remember, (x-mu) are
+        # rows in xdiff), then sum across each row. The result is an n-dim vector
+        # where each entry is
+        #       (x-mu)^T @ invCov @ (x-mu)
+        # for the corresponding row x, as desired.
+        var0 = -0.5 * np.sum((xdiff0 @ invcov0) * xdiff0, axis=1)
+        var1 = -0.5 * np.sum((xdiff1 @ invcov1) * xdiff1, axis=1)
 
-    predicted_labels = np.where(delta1 > delta0, 1, 0)
+        # Add scalar term (-0.5*logDet + logPrior) to every entry of above vector
+        delta0 = var0 - 0.5 * logdet0 + logprior0
+        delta1 = var1 - 0.5 * logdet1 + logprior1
+
+        preds = np.where(delta1 > delta0, 1, 0)
+
+        if len(cov) == 1:
+            # common covariance
+            segment_dir = 'segmentation_GDA_common'
+
+        else:
+            # variable covariance
+            segment_dir = 'segmentation_GDA_variable'
+
+
+        img_preds = ImageArray(img_features.base_name, img_features.shape, preds)
+        predicted_labels.append(img_preds)
+
     return predicted_labels
 
 #print precision/call for both classes to console
@@ -322,7 +383,22 @@ def predict(testing_features, prior, mu, cov):
 #recall of label 1:    xx.xx%
 #
 def accuracy_analysis(predicted_labels, ground_truth_labels):
-    pass
+    preds = np.concatenate([p.array for p in predicted_labels])
+    truth = np.concatenate([t.array for t in ground_truth_labels])
+
+    def print_accuracy_for_label(label):
+        true_pos = np.sum((preds == label) & (truth == label))
+        false_pos = np.sum((preds == label) & (truth != label))
+        false_neg = np.sum((preds != label) & (truth == label))
+
+        precision = true_pos / (true_pos + false_pos) * 100.0
+        recall = true_pos / (true_pos + false_neg) * 100.0
+        print(f"precision of label {label}: {precision:.2f}%")
+        print(f"recall of label {label}:    {recall:.2f}%")
+
+    print_accuracy_for_label(0)
+    print_accuracy_for_label(1)
+
 #**************************************************************************************************
     
 
