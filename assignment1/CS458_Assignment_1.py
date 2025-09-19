@@ -14,6 +14,8 @@ import numpy as np
 from roipoly import RoiPoly
 
 
+predicting_common_cov = True
+
 class ImageArray:
     def __init__(self, base_name, shape, array):
         self.base_name = base_name
@@ -29,7 +31,6 @@ def label_training_dataset(training_path, region_path):
     if os.path.isdir(training_path):
         os.makedirs(region_path, exist_ok=True)
     else:
-        print(f"The directory {training_path} does not exist!")
         return
 
     for filename in os.listdir(training_path):
@@ -40,7 +41,6 @@ def label_training_dataset(training_path, region_path):
             neg_filepath = os.path.join(region_path, base_name + "-neg.npy")
             if os.path.isfile(pos_filepath) and os.path.isfile(neg_filepath):
                 # Skip labeling images with positive and negative regions saved
-                print(f"Skipped labeling {filepath} - positive/negative regions already saved")
                 continue
 
             img = plt.imread(filepath)
@@ -74,7 +74,6 @@ def label_testing_dataset(training_path, region_path):
     if os.path.isdir(training_path):
         os.makedirs(region_path, exist_ok=True)
     else:
-        print(f"The directory {training_path} does not exist!")
         return
 
     for filename in os.listdir(training_path):
@@ -84,7 +83,6 @@ def label_testing_dataset(training_path, region_path):
             pos_filepath = os.path.join(region_path, base_name + "-pos.npy")
             if os.path.isfile(pos_filepath):
                 # Skip labeling images with positive region saved
-                print(f"Skipped labeling {filepath} - positive region already saved")
                 continue
 
             img = plt.imread(filepath)
@@ -119,7 +117,6 @@ def import_pre_labeled_training(training_path, region_path):
             neg_filepath = os.path.join(region_path, base_name + "-neg.npy")
             if not (os.path.isfile(pos_filepath) and os.path.isfile(neg_filepath)):
                 # Skip images without positive and negative regions saved
-                print(f"Skipped importing {filepath} - positive/negative regions missing")
                 continue
 
             # Read in image and positive/negative regions
@@ -163,7 +160,6 @@ def import_pre_labeled_testing(testing_path, region_path):
             pos_filepath = os.path.join(region_path, base_name + "-pos.npy")
             if not os.path.isfile(pos_filepath):
                 # Skip images without positive region saved
-                print(f"Skipped importing {filepath} - positive region missing")
                 continue
 
             # Read in image and positive region
@@ -206,9 +202,6 @@ def train_GDA_common_variance(features, labels):
         mu = np.zeros((2, d))
         cov = np.identity(d)
         return prior, mu, [cov]
-    
-    print(f"x.shape = {x.shape}")
-    print(f"y.shape = {y.shape}")
 
     x0 = x[y == 0]
     x1 = x[y == 1]
@@ -219,15 +212,11 @@ def train_GDA_common_variance(features, labels):
     p0 = n0 / n
     p1 = n1 / n
     prior = np.array([p0, p1])
-    print(f"priors:")
-    print(f"- p0 = {p0}")
-    print(f"- p1 = {p1}")
 
     # Compute means (along columns)
     mu0 = np.mean(x0, axis=0) if n0 > 0 else np.zeroes(d)
     mu1 = np.mean(x1, axis=0) if n1 > 0 else np.zeroes(d)
     mu = np.vstack([mu0, mu1])
-    print(f"mu = \n{mu}")
 
     # Common covariance matrix
     cov = np.zeros((d, d))
@@ -242,9 +231,9 @@ def train_GDA_common_variance(features, labels):
         xdiff1 = x1 - mu1
         cov += xdiff1.T @ xdiff1
     cov = cov / (n - 1)
-    print(f"cov = \n{cov}")
 
     return prior, mu, [cov]
+
 
 def train_GDA_variable_variance(features, labels):
     x = np.concatenate([f.array for f in features], axis=0)
@@ -256,9 +245,6 @@ def train_GDA_variable_variance(features, labels):
         cov = np.identity(d)
         return prior, mu, [cov, cov]
 
-    print(f"x.shape = {x.shape}")
-    print(f"y.shape = {y.shape}")
-
     x0 = x[y == 0]
     x1 = x[y == 1]
 
@@ -268,15 +254,11 @@ def train_GDA_variable_variance(features, labels):
     p0 = n0 / n
     p1 = n1 / n
     prior = np.array([p0, p1])
-    print(f"priors:")
-    print(f"- p0 = {p0}")
-    print(f"- p1 = {p1}")
 
     # Compute means (along columns)
     mu0 = np.mean(x0, axis=0) if n0 > 0 else np.zeroes(d)
     mu1 = np.mean(x1, axis=0) if n1 > 0 else np.zeroes(d)
     mu = np.vstack([mu0, mu1])
-    print(f"mu = \n{mu}")
 
     cov0 = np.identity(d)
     cov1 = np.identity(d)
@@ -286,8 +268,6 @@ def train_GDA_variable_variance(features, labels):
     if n1 > 0:
         xdiff1 = x1 - mu1
         cov1 = (xdiff1.T @ xdiff1) / (n1 - 1)
-    print(f"cov0 = \n{cov0}")
-    print(f"cov1 = \n{cov1}")
 
     return prior, mu, [cov0, cov1]
 #**************************************************************************************************
@@ -297,13 +277,16 @@ def train_GDA_variable_variance(features, labels):
 #**************************************************************************************************
 #assign labels using trained GDA parameters for testing features
 def predict(testing_features, prior, mu, cov):
+    global predicting_common_cov
+    predicting_common_cov = len(cov) == 1
+
     p0, p1 = prior[0], prior[1]
     mu0, mu1 = mu[0], mu[1]
     cov0 = cov[0]
-    cov1 = cov[1 if len(cov) > 1 else 0]
+    cov1 = cov[0 if predicting_common_cov else 1]
 
     # Create directory for outputting segmented images (if it doesn't exist)
-    segment_dir = "segmentation_GDA_common" if len(cov) == 1 else "segmentation_GDA_variable"
+    segment_dir = "segmentation_GDA_common" if predicting_common_cov else "segmentation_GDA_variable"
     os.makedirs(segment_dir, exist_ok=True)
 
     # Pre-compute constants needed to compute discriminant function (delta) below
@@ -385,8 +368,6 @@ def predict(testing_features, prior, mu, cov):
 def accuracy_analysis(predicted_labels, ground_truth_labels):
     preds = np.concatenate([p.array for p in predicted_labels], axis=0)
     truth = np.concatenate([t.array for t in ground_truth_labels], axis=0)
-    print(f"preds.shape = {preds.shape}")
-    print(f"truth.shape = {truth.shape}")
 
     def print_accuracy_for_label(label):
         true_pos = np.sum((preds == label) & (truth == label))
@@ -398,6 +379,8 @@ def accuracy_analysis(predicted_labels, ground_truth_labels):
         print(f"precision of label {label}: {precision:.2f}%")
         print(f"recall of label {label}:    {recall:.2f}%")
 
+    common_or_variable = "common" if predicting_common_cov else "variable"
+    print(f"GDA with {common_or_variable} variance:")
     print_accuracy_for_label(0)
     print_accuracy_for_label(1)
 
