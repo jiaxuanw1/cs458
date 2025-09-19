@@ -198,8 +198,8 @@ def import_pre_labeled_testing(testing_path, region_path):
 #main GDA training functions
 #**************************************************************************************************
 def train_GDA_common_variance(features, labels):
-    x = np.concatenate([f.array for f in features])
-    y = np.concatenate([l.array for l in labels])
+    x = np.concatenate([f.array for f in features], axis=0)
+    y = np.concatenate([l.array for l in labels], axis=0)
     n, d = x.shape
     if n == 0:
         prior = np.array([0.5, 0.5])
@@ -207,8 +207,6 @@ def train_GDA_common_variance(features, labels):
         cov = np.identity(d)
         return prior, mu, [cov]
     
-    print(f"x:\n{x}")
-    print(f"y:\n{y}")
     print(f"x.shape = {x.shape}")
     print(f"y.shape = {y.shape}")
 
@@ -229,8 +227,7 @@ def train_GDA_common_variance(features, labels):
     mu0 = np.mean(x0, axis=0) if n0 > 0 else np.zeroes(d)
     mu1 = np.mean(x1, axis=0) if n1 > 0 else np.zeroes(d)
     mu = np.vstack([mu0, mu1])
-    print(f"mu0 = {mu0}")
-    print(f"mu1 = {mu1}")
+    print(f"mu = \n{mu}")
 
     # Common covariance matrix
     cov = np.zeros((d, d))
@@ -245,13 +242,13 @@ def train_GDA_common_variance(features, labels):
         xdiff1 = x1 - mu1
         cov += xdiff1.T @ xdiff1
     cov = cov / (n - 1)
-    print(f"cov = {cov}")
+    print(f"cov = \n{cov}")
 
     return prior, mu, [cov]
 
 def train_GDA_variable_variance(features, labels):
-    x = np.concatenate([f.array for f in features])
-    y = np.concatenate([l.array for l in labels])
+    x = np.concatenate([f.array for f in features], axis=0)
+    y = np.concatenate([l.array for l in labels], axis=0)
     n, d = x.shape
     if n == 0:
         prior = np.array([0.5, 0.5])
@@ -259,8 +256,6 @@ def train_GDA_variable_variance(features, labels):
         cov = np.identity(d)
         return prior, mu, [cov, cov]
 
-    print(f"x:\n{x}")
-    print(f"y:\n{y}")
     print(f"x.shape = {x.shape}")
     print(f"y.shape = {y.shape}")
 
@@ -281,8 +276,7 @@ def train_GDA_variable_variance(features, labels):
     mu0 = np.mean(x0, axis=0) if n0 > 0 else np.zeroes(d)
     mu1 = np.mean(x1, axis=0) if n1 > 0 else np.zeroes(d)
     mu = np.vstack([mu0, mu1])
-    print(f"mu0 = {mu0}")
-    print(f"mu1 = {mu1}")
+    print(f"mu = \n{mu}")
 
     cov0 = np.identity(d)
     cov1 = np.identity(d)
@@ -292,8 +286,8 @@ def train_GDA_variable_variance(features, labels):
     if n1 > 0:
         xdiff1 = x1 - mu1
         cov1 = (xdiff1.T @ xdiff1) / (n1 - 1)
-    print(f"cov0 = {cov0}")
-    print(f"cov1 = {cov1}")
+    print(f"cov0 = \n{cov0}")
+    print(f"cov1 = \n{cov1}")
 
     return prior, mu, [cov0, cov1]
 #**************************************************************************************************
@@ -307,6 +301,12 @@ def predict(testing_features, prior, mu, cov):
     mu0, mu1 = mu[0], mu[1]
     cov0 = cov[0]
     cov1 = cov[1 if len(cov) > 1 else 0]
+
+    # Create directory for outputting segmented images (if it doesn't exist)
+    segment_dir = "segmentation_GDA_common" if len(cov) == 1 else "segmentation_GDA_variable"
+    os.makedirs(segment_dir, exist_ok=True)
+
+    # Pre-compute constants needed to compute discriminant function (delta) below
 
     _, logdet0 = np.linalg.slogdet(cov0)
     _, logdet1 = np.linalg.slogdet(cov1)
@@ -352,16 +352,16 @@ def predict(testing_features, prior, mu, cov):
         delta0 = var0 - 0.5 * logdet0 + logprior0
         delta1 = var1 - 0.5 * logdet1 + logprior1
 
+        # Predictions: 1 = positive (barrel), 0 = negative (non-barrel)
         preds = np.where(delta1 > delta0, 1, 0)
 
-        if len(cov) == 1:
-            # common covariance
-            segment_dir = 'segmentation_GDA_common'
-
-        else:
-            # variable covariance
-            segment_dir = 'segmentation_GDA_variable'
-
+        # Draw and save segmented image
+        preds_mat = preds.reshape(img_features.shape[:2])
+        seg_img = np.zeros(img_features.shape)
+        seg_img[preds_mat == 1] = [1.0, 0.0, 0.0]   # red
+        seg_img[preds_mat == 0] = [0.0, 0.0, 0.0]   # black
+        seg_img_path = os.path.join(segment_dir, img_features.base_name + "-seg.png")
+        plt.imsave(seg_img_path, seg_img)
 
         img_preds = ImageArray(img_features.base_name, img_features.shape, preds)
         predicted_labels.append(img_preds)
@@ -383,8 +383,10 @@ def predict(testing_features, prior, mu, cov):
 #recall of label 1:    xx.xx%
 #
 def accuracy_analysis(predicted_labels, ground_truth_labels):
-    preds = np.concatenate([p.array for p in predicted_labels])
-    truth = np.concatenate([t.array for t in ground_truth_labels])
+    preds = np.concatenate([p.array for p in predicted_labels], axis=0)
+    truth = np.concatenate([t.array for t in ground_truth_labels], axis=0)
+    print(f"preds.shape = {preds.shape}")
+    print(f"truth.shape = {truth.shape}")
 
     def print_accuracy_for_label(label):
         true_pos = np.sum((preds == label) & (truth == label))
